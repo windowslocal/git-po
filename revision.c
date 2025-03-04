@@ -1,4 +1,5 @@
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "config.h"
@@ -51,8 +52,8 @@
 
 volatile show_early_output_fn_t show_early_output;
 
-static const char *term_bad;
-static const char *term_good;
+static char *term_bad;
+static char *term_good;
 
 implement_shared_commit_slab(revision_sources, char *);
 
@@ -390,7 +391,8 @@ static struct object *get_reference(struct rev_info *revs, const char *name,
 	if (!object) {
 		if (revs->ignore_missing)
 			return NULL;
-		if (revs->exclude_promisor_objects && is_promisor_object(oid))
+		if (revs->exclude_promisor_objects &&
+		    is_promisor_object(revs->repo, oid))
 			return NULL;
 		if (revs->do_not_die_on_missing_objects) {
 			oidset_insert(&revs->missing_commits, oid);
@@ -432,7 +434,7 @@ static struct commit *handle_commit(struct rev_info *revs,
 			if (revs->ignore_missing_links || (flags & UNINTERESTING))
 				return NULL;
 			if (revs->exclude_promisor_objects &&
-			    is_promisor_object(&tag->tagged->oid))
+			    is_promisor_object(revs->repo, &tag->tagged->oid))
 				return NULL;
 			if (revs->do_not_die_on_missing_objects && oid) {
 				oidset_insert(&revs->missing_commits, oid);
@@ -1071,7 +1073,11 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 					ts->treesame[nth_parent] = 1;
 				continue;
 			}
+
+			free_commit_list(parent->next);
 			parent->next = NULL;
+			while (commit->parents != parent)
+				pop_commit(&commit->parents);
 			commit->parents = parent;
 
 			/*
@@ -1103,6 +1109,7 @@ static void try_to_simplify_commit(struct rev_info *revs, struct commit *commit)
 					die("cannot simplify commit %s (invalid %s)",
 					    oid_to_hex(&commit->object.oid),
 					    oid_to_hex(&p->object.oid));
+				free_commit_list(p->parents);
 				p->parents = NULL;
 			}
 		/* fallthrough */
@@ -1206,7 +1213,7 @@ static int process_parents(struct rev_info *revs, struct commit *commit,
 			     revs->do_not_die_on_missing_objects;
 		if (repo_parse_commit_gently(revs->repo, p, gently) < 0) {
 			if (revs->exclude_promisor_objects &&
-			    is_promisor_object(&p->object.oid)) {
+			    is_promisor_object(revs->repo, &p->object.oid)) {
 				if (revs->first_parent_only)
 					break;
 				continue;
@@ -1648,7 +1655,7 @@ struct all_refs_cb {
 	struct worktree *wt;
 };
 
-static int handle_one_ref(const char *path, const struct object_id *oid,
+static int handle_one_ref(const char *path, const char *referent UNUSED, const struct object_id *oid,
 			  int flag UNUSED,
 			  void *cb_data)
 {
@@ -1872,7 +1879,7 @@ void add_index_objects_to_pending(struct rev_info *revs, unsigned int flags)
 			continue; /* current index already taken care of */
 
 		if (read_index_from(&istate,
-				    worktree_git_path(wt, "index"),
+				    worktree_git_path(the_repository, wt, "index"),
 				    get_worktree_git_dir(wt)) > 0)
 			do_add_index_objects_to_pending(revs, &istate, flags);
 		discard_index(&istate);
@@ -3222,6 +3229,11 @@ void release_revisions(struct rev_info *revs)
 	clear_decoration(&revs->treesame, free);
 	line_log_free(revs);
 	oidset_clear(&revs->missing_commits);
+
+	for (int i = 0; i < revs->bloom_keys_nr; i++)
+		clear_bloom_key(&revs->bloom_keys[i]);
+	FREE_AND_NULL(revs->bloom_keys);
+	revs->bloom_keys_nr = 0;
 }
 
 static void add_child(struct rev_info *revs, struct commit *parent, struct commit *child)
@@ -3245,6 +3257,7 @@ static int remove_duplicate_parents(struct rev_info *revs, struct commit *commit
 		struct commit *parent = p->item;
 		if (parent->object.flags & TMP_MARK) {
 			*pp = p->next;
+			free(p);
 			if (ts)
 				compact_treesame(revs, commit, surviving_parents);
 			continue;
@@ -3909,7 +3922,7 @@ int prepare_revision_walk(struct rev_info *revs)
 		revs->treesame.name = "treesame";
 
 	if (revs->exclude_promisor_objects) {
-		for_each_packed_object(mark_uninteresting, revs,
+		for_each_packed_object(revs->repo, mark_uninteresting, revs,
 				       FOR_EACH_OBJECT_PROMISOR_ONLY);
 	}
 
@@ -4000,6 +4013,7 @@ int rewrite_parents(struct rev_info *revs, struct commit *commit,
 			break;
 		case rewrite_one_noparents:
 			*pp = parent->next;
+			free(parent);
 			continue;
 		case rewrite_one_error:
 			return -1;
@@ -4096,10 +4110,10 @@ enum commit_action get_commit_action(struct rev_info *revs, struct commit *commi
 {
 	if (commit->object.flags & SHOWN)
 		return commit_ignore;
-	if (revs->unpacked && has_object_pack(&commit->object.oid))
+	if (revs->unpacked && has_object_pack(revs->repo, &commit->object.oid))
 		return commit_ignore;
 	if (revs->no_kept_objects) {
-		if (has_object_kept_pack(&commit->object.oid,
+		if (has_object_kept_pack(revs->repo, &commit->object.oid,
 					 revs->keep_pack_cache_flags))
 			return commit_ignore;
 	}
@@ -4200,10 +4214,18 @@ static void save_parents(struct rev_info *revs, struct commit *commit)
 		*pp = EMPTY_PARENT_LIST;
 }
 
+static void free_saved_parent(struct commit_list **parents)
+{
+	if (*parents != EMPTY_PARENT_LIST)
+		free_commit_list(*parents);
+}
+
 static void free_saved_parents(struct rev_info *revs)
 {
-	if (revs->saved_parents_slab)
-		clear_saved_parents(revs->saved_parents_slab);
+	if (!revs->saved_parents_slab)
+		return;
+	deep_clear_saved_parents(revs->saved_parents_slab, free_saved_parent);
+	FREE_AND_NULL(revs->saved_parents_slab);
 }
 
 struct commit_list *get_saved_parents(struct rev_info *revs, const struct commit *commit)
@@ -4407,6 +4429,7 @@ static struct commit *get_revision_internal(struct rev_info *revs)
 				c = get_revision_1(revs);
 				if (!c)
 					break;
+				free_commit_buffer(revs->repo->parsed_objects, c);
 			}
 		}
 

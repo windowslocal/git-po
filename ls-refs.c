@@ -53,12 +53,10 @@ static enum {
  */
 static int ref_match(const struct strvec *prefixes, const char *refname)
 {
-	int i;
-
 	if (!prefixes->nr)
 		return 1; /* no restriction */
 
-	for (i = 0; i < prefixes->nr; i++) {
+	for (size_t i = 0; i < prefixes->nr; i++) {
 		const char *prefix = prefixes->v[i];
 
 		if (starts_with(refname, prefix))
@@ -77,7 +75,7 @@ struct ls_refs_data {
 	unsigned unborn : 1;
 };
 
-static int send_ref(const char *refname, const struct object_id *oid,
+static int send_ref(const char *refname, const char *referent UNUSED, const struct object_id *oid,
 		    int flag, void *cb_data)
 {
 	struct ls_refs_data *data = cb_data;
@@ -135,7 +133,7 @@ static void send_possibly_unborn_head(struct ls_refs_data *data)
 	oid_is_null = is_null_oid(&oid);
 	if (!oid_is_null ||
 	    (data->unborn && data->symrefs && (flag & REF_ISSYMREF)))
-		send_ref(namespaced.buf, oid_is_null ? NULL : &oid, flag, data);
+		send_ref(namespaced.buf, NULL, oid_is_null ? NULL : &oid, flag, data);
 	strbuf_release(&namespaced);
 }
 

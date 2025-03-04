@@ -141,7 +141,7 @@ static void find_username_in_item(CFDictionaryRef item)
 				username_buf,
 				buffer_len,
 				ENCODING)) {
-		write_item("username", username_buf, buffer_len - 1);
+		write_item("username", username_buf, strlen(username_buf));
 	}
 	free(username_buf);
 }
@@ -422,7 +422,7 @@ int main(int argc, const char **argv)
 	const char *usage =
 		"usage: git credential-osxkeychain <get|store|erase>";
 
-	if (!argv[1])
+	if (argc < 2 || !*argv[1])
 		die("%s", usage);
 
 	if (open(argv[0], O_RDONLY | O_EXLOCK) == -1)

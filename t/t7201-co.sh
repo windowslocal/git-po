@@ -23,7 +23,6 @@ Test switching across them.
 GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME=main
 export GIT_TEST_DEFAULT_INITIAL_BRANCH_NAME
 
-TEST_PASSES_SANITIZE_LEAK=true
 . ./test-lib.sh
 
 test_tick
@@ -225,7 +224,7 @@ test_expect_success 'switch to another branch while carrying a deletion' '
 '
 
 test_expect_success 'checkout to detach HEAD (with advice declined)' '
-	git config advice.detachedHead false &&
+	git config set advice.detachedHead false &&
 	rev=$(git rev-parse --short renamer^) &&
 	git checkout -f renamer &&
 	git clean -f &&
@@ -245,7 +244,7 @@ test_expect_success 'checkout to detach HEAD (with advice declined)' '
 '
 
 test_expect_success 'checkout to detach HEAD' '
-	git config advice.detachedHead true &&
+	git config set advice.detachedHead true &&
 	rev=$(git rev-parse --short renamer^) &&
 	git checkout -f renamer &&
 	git clean -f &&
@@ -496,6 +495,19 @@ test_expect_success 'checkout unmerged stage' '
 	test_cmp expect file &&
 	git checkout --theirs file &&
 	test ztheirside = "z$(cat file)"
+'
+
+test_expect_success 'checkout --ours is incompatible with switching' '
+	test_must_fail git checkout --ours 2>error &&
+	test_grep "needs the paths to check out" error &&
+
+	test_must_fail git checkout --ours HEAD 2>error &&
+	test_grep "cannot be used with switching" error &&
+
+	test_must_fail git checkout --ours main 2>error &&
+	test_grep "cannot be used with switching" error &&
+
+	git checkout --ours file
 '
 
 test_expect_success 'checkout path with --merge from tree-ish is a no-no' '

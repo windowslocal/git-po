@@ -1,4 +1,5 @@
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "abspath.h"
@@ -357,7 +358,7 @@ static void rerere_strbuf_putconflict(struct strbuf *buf, int ch, size_t size)
 }
 
 static int handle_conflict(struct strbuf *out, struct rerere_io *io,
-			   int marker_size, git_hash_ctx *ctx)
+			   int marker_size, struct git_hash_ctx *ctx)
 {
 	enum {
 		RR_SIDE_1 = 0, RR_SIDE_2, RR_ORIGINAL
@@ -395,12 +396,12 @@ static int handle_conflict(struct strbuf *out, struct rerere_io *io,
 			strbuf_addbuf(out, &two);
 			rerere_strbuf_putconflict(out, '>', marker_size);
 			if (ctx) {
-				the_hash_algo->update_fn(ctx, one.buf ?
-							 one.buf : "",
-							 one.len + 1);
-				the_hash_algo->update_fn(ctx, two.buf ?
-							 two.buf : "",
-							 two.len + 1);
+				git_hash_update(ctx, one.buf ?
+						one.buf : "",
+						one.len + 1);
+				git_hash_update(ctx, two.buf ?
+						two.buf : "",
+						two.len + 1);
 			}
 			break;
 		} else if (hunk == RR_SIDE_1)
@@ -431,7 +432,7 @@ static int handle_conflict(struct strbuf *out, struct rerere_io *io,
  */
 static int handle_path(unsigned char *hash, struct rerere_io *io, int marker_size)
 {
-	git_hash_ctx ctx;
+	struct git_hash_ctx ctx;
 	struct strbuf buf = STRBUF_INIT, out = STRBUF_INIT;
 	int has_conflicts = 0;
 	if (hash)
@@ -452,7 +453,7 @@ static int handle_path(unsigned char *hash, struct rerere_io *io, int marker_siz
 	strbuf_release(&out);
 
 	if (hash)
-		the_hash_algo->final_fn(hash, &ctx);
+		git_hash_final(hash, &ctx);
 
 	return has_conflicts;
 }
@@ -1107,7 +1108,7 @@ fail_exit:
 
 int rerere_forget(struct repository *r, struct pathspec *pathspec)
 {
-	int i, fd;
+	int i, fd, ret;
 	struct string_list conflict = STRING_LIST_INIT_DUP;
 	struct string_list merge_rr = STRING_LIST_INIT_DUP;
 
@@ -1132,7 +1133,12 @@ int rerere_forget(struct repository *r, struct pathspec *pathspec)
 			continue;
 		rerere_forget_one_path(r->index, it->string, &merge_rr);
 	}
-	return write_rr(&merge_rr, fd);
+
+	ret = write_rr(&merge_rr, fd);
+
+	string_list_clear(&conflict, 0);
+	string_list_clear(&merge_rr, 1);
+	return ret;
 }
 
 /*
@@ -1203,8 +1209,10 @@ void rerere_gc(struct repository *r, struct string_list *rr)
 	if (setup_rerere(r, rr, 0) < 0)
 		return;
 
-	git_config_get_expiry_in_days("gc.rerereresolved", &cutoff_resolve, now);
-	git_config_get_expiry_in_days("gc.rerereunresolved", &cutoff_noresolve, now);
+	repo_config_get_expiry_in_days(the_repository, "gc.rerereresolved",
+				       &cutoff_resolve, now);
+	repo_config_get_expiry_in_days(the_repository, "gc.rerereunresolved",
+				       &cutoff_noresolve, now);
 	git_config(git_default_config, NULL);
 	dir = opendir(git_path("rr-cache"));
 	if (!dir)

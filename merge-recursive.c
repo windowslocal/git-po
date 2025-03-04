@@ -5,6 +5,7 @@
  */
 
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "merge-recursive.h"
@@ -2757,23 +2758,22 @@ static int process_renames(struct merge_options *opt,
 	const struct rename *sre;
 
 	/*
-	 * FIXME: As string-list.h notes, it's O(n^2) to build a sorted
-	 * string_list one-by-one, but O(n log n) to build it unsorted and
-	 * then sort it.  Note that as we build the list, we do not need to
-	 * check if the existing destination path is already in the list,
-	 * because the structure of diffcore_rename guarantees we won't
-	 * have duplicates.
+	 * Note that as we build the list, we do not need to check if the
+	 * existing destination path is already in the list, because the
+	 * structure of diffcore_rename guarantees we won't have duplicates.
 	 */
 	for (i = 0; i < a_renames->nr; i++) {
 		sre = a_renames->items[i].util;
-		string_list_insert(&a_by_dst, sre->pair->two->path)->util
+		string_list_append(&a_by_dst, sre->pair->two->path)->util
 			= (void *)sre;
 	}
 	for (i = 0; i < b_renames->nr; i++) {
 		sre = b_renames->items[i].util;
-		string_list_insert(&b_by_dst, sre->pair->two->path)->util
+		string_list_append(&b_by_dst, sre->pair->two->path)->util
 			= (void *)sre;
 	}
+	string_list_sort(&a_by_dst);
+	string_list_sort(&b_by_dst);
 
 	for (i = 0, j = 0; i < a_renames->nr || j < b_renames->nr;) {
 		struct string_list *renames1, *renames2Dst;
@@ -3921,7 +3921,7 @@ int merge_recursive_generic(struct merge_options *opt,
 	return clean ? 0 : 1;
 }
 
-static void merge_recursive_config(struct merge_options *opt)
+static void merge_recursive_config(struct merge_options *opt, int ui)
 {
 	char *value = NULL;
 	int renormalize = 0;
@@ -3950,11 +3950,20 @@ static void merge_recursive_config(struct merge_options *opt)
 		} /* avoid erroring on values from future versions of git */
 		free(value);
 	}
+	if (ui) {
+		if (!git_config_get_string("diff.algorithm", &value)) {
+			long diff_algorithm = parse_algorithm_value(value);
+			if (diff_algorithm < 0)
+				die(_("unknown value for config '%s': %s"), "diff.algorithm", value);
+			opt->xdl_opts = (opt->xdl_opts & ~XDF_DIFF_ALGORITHM_MASK) | diff_algorithm;
+			free(value);
+		}
+	}
 	git_config(git_xmerge_config, NULL);
 }
 
-void init_merge_options(struct merge_options *opt,
-			struct repository *repo)
+static void init_merge_options(struct merge_options *opt,
+			struct repository *repo, int ui)
 {
 	const char *merge_verbosity;
 	memset(opt, 0, sizeof(struct merge_options));
@@ -3973,12 +3982,24 @@ void init_merge_options(struct merge_options *opt,
 
 	opt->conflict_style = -1;
 
-	merge_recursive_config(opt);
+	merge_recursive_config(opt, ui);
 	merge_verbosity = getenv("GIT_MERGE_VERBOSITY");
 	if (merge_verbosity)
 		opt->verbosity = strtol(merge_verbosity, NULL, 10);
 	if (opt->verbosity >= 5)
 		opt->buffer_output = 0;
+}
+
+void init_ui_merge_options(struct merge_options *opt,
+			struct repository *repo)
+{
+	init_merge_options(opt, repo, 1);
+}
+
+void init_basic_merge_options(struct merge_options *opt,
+			struct repository *repo)
+{
+	init_merge_options(opt, repo, 0);
 }
 
 /*

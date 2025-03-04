@@ -1,3 +1,6 @@
+#define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
+
 #include "builtin.h"
 #include "config.h"
 #include "gettext.h"
@@ -6,7 +9,6 @@
 #include "object-name.h"
 #include "parse-options.h"
 #include "quote.h"
-#include "repository.h"
 
 static const char * const git_update_ref_usage[] = {
 	N_("git update-ref [<options>] -d <refname> [<old-oid>]"),
@@ -274,7 +276,7 @@ static void parse_cmd_update(struct ref_transaction *transaction,
 }
 
 static void parse_cmd_symref_update(struct ref_transaction *transaction,
-				    const char *next, const char *end)
+				    const char *next, const char *end UNUSED)
 {
 	char *refname, *new_target, *old_arg;
 	char *old_target = NULL;
@@ -360,7 +362,7 @@ static void parse_cmd_create(struct ref_transaction *transaction,
 
 
 static void parse_cmd_symref_create(struct ref_transaction *transaction,
-				    const char *next, const char *end)
+				    const char *next, const char *end UNUSED)
 {
 	struct strbuf err = STRBUF_INIT;
 	char *refname, *new_target;
@@ -423,7 +425,7 @@ static void parse_cmd_delete(struct ref_transaction *transaction,
 
 
 static void parse_cmd_symref_delete(struct ref_transaction *transaction,
-				    const char *next, const char *end)
+				    const char *next, const char *end UNUSED)
 {
 	struct strbuf err = STRBUF_INIT;
 	char *refname, *old_target;
@@ -479,7 +481,7 @@ static void parse_cmd_verify(struct ref_transaction *transaction,
 }
 
 static void parse_cmd_symref_verify(struct ref_transaction *transaction,
-				    const char *next, const char *end)
+				    const char *next, const char *end UNUSED)
 {
 	struct strbuf err = STRBUF_INIT;
 	struct object_id old_oid;
@@ -612,7 +614,7 @@ static void update_refs_stdin(void)
 	int i, j;
 
 	transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
-						  &err);
+						  0, &err);
 	if (!transaction)
 		die("%s", err.buf);
 
@@ -680,7 +682,7 @@ static void update_refs_stdin(void)
 			 */
 			state = cmd->state;
 			transaction = ref_store_transaction_begin(get_main_ref_store(the_repository),
-								  &err);
+								  0, &err);
 			if (!transaction)
 				die("%s", err.buf);
 
@@ -713,7 +715,10 @@ static void update_refs_stdin(void)
 	strbuf_release(&input);
 }
 
-int cmd_update_ref(int argc, const char **argv, const char *prefix)
+int cmd_update_ref(int argc,
+		   const char **argv,
+		   const char *prefix,
+		   struct repository *repo UNUSED)
 {
 	const char *refname, *oldval;
 	struct object_id oid, oldoid;

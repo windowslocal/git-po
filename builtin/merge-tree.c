@@ -1,3 +1,5 @@
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "builtin.h"
 #include "tree-walk.h"
 #include "xdiff-interface.h"
@@ -10,13 +12,13 @@
 #include "object-name.h"
 #include "object-store-ll.h"
 #include "parse-options.h"
-#include "repository.h"
 #include "blob.h"
 #include "merge-blobs.h"
 #include "quote.h"
 #include "tree.h"
 #include "config.h"
 #include "strvec.h"
+#include "write-or-die.h"
 
 static int line_termination = '\n';
 
@@ -497,10 +499,9 @@ static int real_merge(struct merge_tree_options *o,
 	if (!result.clean) {
 		struct string_list conflicted_files = STRING_LIST_INIT_NODUP;
 		const char *last = NULL;
-		int i;
 
 		merge_get_conflicted_files(&result, &conflicted_files);
-		for (i = 0; i < conflicted_files.nr; i++) {
+		for (size_t i = 0; i < conflicted_files.nr; i++) {
 			const char *name = conflicted_files.items[i].string;
 			struct stage_info *c = conflicted_files.items[i].util;
 			if (!o->name_only)
@@ -526,13 +527,17 @@ static int real_merge(struct merge_tree_options *o,
 	return !result.clean; /* result.clean < 0 handled above */
 }
 
-int cmd_merge_tree(int argc, const char **argv, const char *prefix)
+int cmd_merge_tree(int argc,
+		   const char **argv,
+		   const char *prefix,
+		   struct repository *repo UNUSED)
 {
 	struct merge_tree_options o = { .show_messages = -1 };
 	struct strvec xopts = STRVEC_INIT;
 	int expected_remaining_argc;
 	int original_argc;
 	const char *merge_base = NULL;
+	int ret;
 
 	const char * const merge_tree_usage[] = {
 		N_("git merge-tree [--write-tree] [<options>] <branch1> <branch2>"),
@@ -571,7 +576,7 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 	};
 
 	/* Init merge options */
-	init_merge_options(&o.merge_options, the_repository);
+	init_basic_merge_options(&o.merge_options, the_repository);
 
 	/* Parse arguments */
 	original_argc = argc - 1; /* ignoring argv[0] */
@@ -580,7 +585,7 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 
 	if (xopts.nr && o.mode == MODE_TRIVIAL)
 		die(_("--trivial-merge is incompatible with all other options"));
-	for (int x = 0; x < xopts.nr; x++)
+	for (size_t x = 0; x < xopts.nr; x++)
 		if (parse_merge_opt(&o.merge_options, xopts.v[x]))
 			die(_("unknown strategy option: -X%s"), xopts.v[x]);
 
@@ -596,7 +601,6 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 		line_termination = '\0';
 		while (strbuf_getline_lf(&buf, stdin) != EOF) {
 			struct strbuf **split;
-			int result;
 			const char *input_merge_base = NULL;
 
 			split = strbuf_split(&buf, ' ');
@@ -613,19 +617,20 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 			if (input_merge_base && split[2] && split[3] && !split[4]) {
 				strbuf_rtrim(split[2]);
 				strbuf_rtrim(split[3]);
-				result = real_merge(&o, input_merge_base, split[2]->buf, split[3]->buf, prefix);
+				real_merge(&o, input_merge_base, split[2]->buf, split[3]->buf, prefix);
 			} else if (!input_merge_base && !split[2]) {
-				result = real_merge(&o, NULL, split[0]->buf, split[1]->buf, prefix);
+				real_merge(&o, NULL, split[0]->buf, split[1]->buf, prefix);
 			} else {
 				die(_("malformed input line: '%s'."), buf.buf);
 			}
+			maybe_flush_or_die(stdout, "stdout");
 
-			if (result < 0)
-				die(_("merging cannot continue; got unclean result of %d"), result);
 			strbuf_list_free(split);
 		}
 		strbuf_release(&buf);
-		return 0;
+
+		ret = 0;
+		goto out;
 	}
 
 	/* Figure out which mode to use */
@@ -664,7 +669,11 @@ int cmd_merge_tree(int argc, const char **argv, const char *prefix)
 
 	/* Do the relevant type of merge */
 	if (o.mode == MODE_REAL)
-		return real_merge(&o, merge_base, argv[0], argv[1], prefix);
+		ret = real_merge(&o, merge_base, argv[0], argv[1], prefix);
 	else
-		return trivial_merge(argv[0], argv[1], argv[2]);
+		ret = trivial_merge(argv[0], argv[1], argv[2]);
+
+out:
+	strvec_clear(&xopts);
+	return ret;
 }

@@ -228,7 +228,7 @@ struct http_object_request {
 	long http_code;
 	struct object_id oid;
 	struct object_id real_oid;
-	git_hash_ctx c;
+	struct git_hash_ctx c;
 	git_zstream stream;
 	int zret;
 	int rename;
@@ -240,8 +240,8 @@ struct http_object_request *new_http_object_request(
 	const char *base_url, const struct object_id *oid);
 void process_http_object_request(struct http_object_request *freq);
 int finish_http_object_request(struct http_object_request *freq);
-void abort_http_object_request(struct http_object_request *freq);
-void release_http_object_request(struct http_object_request *freq);
+void abort_http_object_request(struct http_object_request **freq);
+void release_http_object_request(struct http_object_request **freq);
 
 /*
  * Instead of using environment variables to determine if curl tracing happens,

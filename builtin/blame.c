@@ -5,6 +5,8 @@
  * See COPYING for licensing conditions
  */
 
+#define USE_THE_REPOSITORY_VARIABLE
+
 #include "builtin.h"
 #include "config.h"
 #include "color.h"
@@ -12,7 +14,6 @@
 #include "environment.h"
 #include "gettext.h"
 #include "hex.h"
-#include "repository.h"
 #include "commit.h"
 #include "diff.h"
 #include "revision.h"
@@ -466,9 +467,14 @@ static void emit_other(struct blame_scoreboard *sb, struct blame_entry *ent, int
 		reset = GIT_COLOR_RESET;
 	}
 
+	if (abbrev < MINIMUM_ABBREV)
+		BUG("abbreviation is smaller than minimum length: %d < %d",
+		    abbrev, MINIMUM_ABBREV);
+
 	for (cnt = 0; cnt < ent->num_lines; cnt++) {
 		char ch;
-		int length = (opt & OUTPUT_LONG_OBJECT_NAME) ? the_hash_algo->hexsz : abbrev;
+		size_t length = (opt & OUTPUT_LONG_OBJECT_NAME) ?
+			the_hash_algo->hexsz : (size_t) abbrev;
 
 		if (opt & OUTPUT_COLOR_LINE) {
 			if (cnt > 0) {
@@ -483,9 +489,9 @@ static void emit_other(struct blame_scoreboard *sb, struct blame_entry *ent, int
 			fputs(color, stdout);
 
 		if (suspect->commit->object.flags & UNINTERESTING) {
-			if (blank_boundary)
-				memset(hex, ' ', length);
-			else if (!(opt & OUTPUT_ANNOTATE_COMPAT)) {
+			if (blank_boundary) {
+				memset(hex, ' ', strlen(hex));
+			} else if (!(opt & OUTPUT_ANNOTATE_COMPAT)) {
 				length--;
 				putchar('^');
 			}
@@ -499,7 +505,8 @@ static void emit_other(struct blame_scoreboard *sb, struct blame_entry *ent, int
 			length--;
 			putchar('?');
 		}
-		printf("%.*s", length, hex);
+
+		printf("%.*s", (int)(length < GIT_MAX_HEXSZ ? length : GIT_MAX_HEXSZ), hex);
 		if (opt & OUTPUT_ANNOTATE_COMPAT) {
 			const char *name;
 			if (opt & OUTPUT_SHOW_EMAIL)
@@ -864,7 +871,10 @@ static void build_ignorelist(struct blame_scoreboard *sb,
 	}
 }
 
-int cmd_blame(int argc, const char **argv, const char *prefix)
+int cmd_blame(int argc,
+	      const char **argv,
+	      const char *prefix,
+	      struct repository *repo UNUSED)
 {
 	struct rev_info revs;
 	char *path = NULL;
@@ -1081,7 +1091,7 @@ parse_done:
 			path = add_prefix(prefix, argv[1]);
 			argv[1] = argv[2];
 		} else {	/* (2a) */
-			if (argc == 2 && is_a_rev(argv[1]) && !get_git_work_tree())
+			if (argc == 2 && is_a_rev(argv[1]) && !repo_get_work_tree(the_repository))
 				die("missing <path> to blame");
 			path = add_prefix(prefix, argv[argc - 1]);
 		}
@@ -1184,14 +1194,16 @@ parse_done:
 	sb.found_guilty_entry = &found_guilty_entry;
 	sb.found_guilty_entry_data = &pi;
 	if (show_progress)
-		pi.progress = start_delayed_progress(_("Blaming lines"), num_lines);
+		pi.progress = start_delayed_progress(the_repository,
+						     _("Blaming lines"),
+						     num_lines);
 
 	assign_blame(&sb, opt);
 
 	stop_progress(&pi.progress);
 
 	if (!incremental)
-		setup_pager();
+		setup_pager(the_repository);
 	else
 		goto cleanup;
 
@@ -1214,12 +1226,6 @@ parse_done:
 		output_option &= ~(OUTPUT_COLOR_LINE | OUTPUT_SHOW_AGE_WITH_COLOR);
 
 	output(&sb, output_option);
-	free((void *)sb.final_buf);
-	for (ent = sb.ent; ent; ) {
-		struct blame_entry *e = ent->next;
-		free(ent);
-		ent = e;
-	}
 
 	if (show_stats) {
 		printf("num read blob: %d\n", sb.num_read_blob);
@@ -1228,6 +1234,12 @@ parse_done:
 	}
 
 cleanup:
+	for (ent = sb.ent; ent; ) {
+		struct blame_entry *e = ent->next;
+		free(ent);
+		ent = e;
+	}
+
 	free(path);
 	cleanup_scoreboard(&sb);
 	release_revisions(&revs);

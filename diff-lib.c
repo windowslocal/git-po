@@ -3,6 +3,7 @@
  */
 
 #define USE_THE_REPOSITORY_VARIABLE
+#define DISABLE_SIGN_COMPARE_WARNINGS
 
 #include "git-compat-util.h"
 #include "commit.h"
@@ -152,20 +153,7 @@ void run_diff_files(struct rev_info *revs, unsigned int option)
 			struct diff_filepair *pair;
 			unsigned int wt_mode = 0;
 			int num_compare_stages = 0;
-			size_t path_len;
 			struct stat st;
-
-			path_len = ce_namelen(ce);
-
-			dpath = xmalloc(combine_diff_path_size(5, path_len));
-			dpath->path = (char *) &(dpath->parent[5]);
-
-			dpath->next = NULL;
-			memcpy(dpath->path, ce->name, path_len);
-			dpath->path[path_len] = '\0';
-			oidclr(&dpath->oid, the_repository->hash_algo);
-			memset(&(dpath->parent[0]), 0,
-			       sizeof(struct combine_diff_parent)*5);
 
 			changed = check_removed(ce, &st);
 			if (!changed)
@@ -177,7 +165,14 @@ void run_diff_files(struct rev_info *revs, unsigned int option)
 				}
 				wt_mode = 0;
 			}
-			dpath->mode = wt_mode;
+
+			/*
+			 * Allocate space for two parents, which will come from
+			 * index stages #2 and #3, if present. Below we'll fill
+			 * these from (stage - 2).
+			 */
+			dpath = combine_diff_path_new(ce->name, ce_namelen(ce),
+						      wt_mode, null_oid(), 2);
 
 			while (i < entries) {
 				struct cache_entry *nce = istate->cache[i];
@@ -308,8 +303,7 @@ static void diff_index_show_file(struct rev_info *revs,
 		       oid, oid_valid, ce->name, dirty_submodule);
 }
 
-static int get_stat_data(const struct index_state *istate,
-			 const struct cache_entry *ce,
+static int get_stat_data(const struct cache_entry *ce,
 			 const struct object_id **oidp,
 			 unsigned int *modep,
 			 int cached, int match_missing,
@@ -352,7 +346,6 @@ static void show_new_file(struct rev_info *revs,
 	const struct object_id *oid;
 	unsigned int mode;
 	unsigned dirty_submodule = 0;
-	struct index_state *istate = revs->diffopt.repo->index;
 
 	if (new_file && S_ISSPARSEDIR(new_file->ce_mode)) {
 		diff_tree_oid(NULL, &new_file->oid, new_file->name, &revs->diffopt);
@@ -363,7 +356,7 @@ static void show_new_file(struct rev_info *revs,
 	 * New file in the index: it might actually be different in
 	 * the working tree.
 	 */
-	if (get_stat_data(istate, new_file, &oid, &mode, cached, match_missing,
+	if (get_stat_data(new_file, &oid, &mode, cached, match_missing,
 	    &dirty_submodule, &revs->diffopt) < 0)
 		return;
 
@@ -379,7 +372,6 @@ static int show_modified(struct rev_info *revs,
 	unsigned int mode, oldmode;
 	const struct object_id *oid;
 	unsigned dirty_submodule = 0;
-	struct index_state *istate = revs->diffopt.repo->index;
 
 	assert(S_ISSPARSEDIR(old_entry->ce_mode) ==
 	       S_ISSPARSEDIR(new_entry->ce_mode));
@@ -395,7 +387,7 @@ static int show_modified(struct rev_info *revs,
 		return 0;
 	}
 
-	if (get_stat_data(istate, new_entry, &oid, &mode, cached, match_missing,
+	if (get_stat_data(new_entry, &oid, &mode, cached, match_missing,
 			  &dirty_submodule, &revs->diffopt) < 0) {
 		if (report_missing)
 			diff_index_show_file(revs, "-", old_entry,
@@ -407,16 +399,10 @@ static int show_modified(struct rev_info *revs,
 	if (revs->combine_merges && !cached &&
 	    (!oideq(oid, &old_entry->oid) || !oideq(&old_entry->oid, &new_entry->oid))) {
 		struct combine_diff_path *p;
-		int pathlen = ce_namelen(new_entry);
 
-		p = xmalloc(combine_diff_path_size(2, pathlen));
-		p->path = (char *) &p->parent[2];
-		p->next = NULL;
-		memcpy(p->path, new_entry->name, pathlen);
-		p->path[pathlen] = 0;
-		p->mode = mode;
-		oidclr(&p->oid, the_repository->hash_algo);
-		memset(p->parent, 0, 2 * sizeof(struct combine_diff_parent));
+		p = combine_diff_path_new(new_entry->name,
+					  ce_namelen(new_entry),
+					  mode, null_oid(), 2);
 		p->parent[0].status = DIFF_STATUS_MODIFIED;
 		p->parent[0].mode = new_entry->ce_mode;
 		oidcpy(&p->parent[0].oid, &new_entry->oid);
@@ -664,6 +650,7 @@ int do_diff_cache(const struct object_id *tree_oid, struct diff_options *opt)
 
 	repo_init_revisions(opt->repo, &revs, NULL);
 	copy_pathspec(&revs.prune_data, &opt->pathspec);
+	diff_free(&revs.diffopt);
 	revs.diffopt = *opt;
 	revs.diffopt.no_free = 1;
 
@@ -704,7 +691,7 @@ int index_differs_from(struct repository *r,
 	return (has_changes != 0);
 }
 
-static struct strbuf *idiff_prefix_cb(struct diff_options *opt UNUSED, void *data)
+static const char *idiff_prefix_cb(struct diff_options *opt UNUSED, void *data)
 {
 	return data;
 }
@@ -719,7 +706,7 @@ void show_interdiff(const struct object_id *oid1, const struct object_id *oid2,
 	opts.output_format = DIFF_FORMAT_PATCH;
 	opts.output_prefix = idiff_prefix_cb;
 	strbuf_addchars(&prefix, ' ', indent);
-	opts.output_prefix_data = &prefix;
+	opts.output_prefix_data = prefix.buf;
 	diff_setup_done(&opts);
 
 	diff_tree_oid(oid1, oid2, "", &opts);
